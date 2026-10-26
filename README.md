@@ -1,406 +1,305 @@
+NestJS Microservices — Parte 2
 
-O projeto utiliza dois serviços NestJS: um API Gateway, responsável pelas requisições HTTP, e um Users Service, que concentra as regras de negócio e a persistência com Prisma e PostgreSQL. A comunicação interna ocorre por TCP. Essa estrutura permite compreender os fundamentos de microsserviços antes de avançar para RabbitMQ, Kafka ou NATS.
+Projeto didático de uma arquitetura de microserviços com NestJS, Prisma 7 e PostgreSQL. A aplicação possui um API Gateway HTTP, um serviço de usuários e um serviço de pedidos. A comunicação interna entre os serviços utiliza o transporte TCP nativo do NestJS.
 
-# Nest Microservices — API Gateway e Users Service
+Objetivos
 
-Projeto didático de microsserviços com **NestJS**, comunicação interna por **TCP**, persistência com **Prisma ORM 7** e banco **PostgreSQL**.
+Implementar operações CRUD para usuários e pedidos.
 
-O API Gateway recebe requisições HTTP. O Users Service concentra as regras de negócio de usuários e o acesso ao banco. A primeira etapa utiliza dados em memória; a versão com Prisma armazena os registros no PostgreSQL.
+Validar dados com DTOs, class-validator e ValidationPipe.
 
-## Arquitetura
+Utilizar Prisma 7 com PostgreSQL.
 
-| Componente | Responsabilidade | Endereço local |
-|---|---|---|
-| Cliente HTTP / Bruno | Enviar requisições e verificar respostas | Acessa o Gateway |
-| API Gateway | Expor rotas HTTP e encaminhar mensagens | `http://localhost:3000` |
-| Users Service | Processar mensagens, validar e persistir usuários | TCP em `127.0.0.1:3001` |
-| PostgreSQL | Armazenar os registros | `127.0.0.1:15432` no Windows; porta `5432` no contêiner |
+Separar a persistência de cada microserviço.
 
-```mermaid
-sequenceDiagram
-    participant C as Cliente HTTP
-    participant G as API Gateway
-    participant U as Users Service
-    participant D as PostgreSQL
-    C->>G: GET /users
-    G->>U: TCP — users.findAll
-    U->>D: Prisma — findMany()
-    D-->>U: Registros
-    U-->>G: Resultado da mensagem
-    G-->>C: HTTP 200 e JSON
-```
+Encaminhar requisições HTTP pelo API Gateway e mensagens TCP entre os serviços.
 
-O Gateway não acessa o banco diretamente. A comunicação TCP é uma introdução à troca de mensagens entre processos, antes de explorar transportes como RabbitMQ, Kafka ou NATS. O exercício atual não precisa de um broker de mensagens.
+Validar a existência do usuário antes de criar um pedido.
 
-## Tecnologias e requisitos
+Arquitetura
 
-- Node.js 22 atualizado ou Node.js 24; ambiente utilizado: Node.js 24.21.0.
-- npm.
-- NestJS 11 e Nest CLI 11 para a criação deste exemplo.
-- `@nestjs/microservices` compatível com a versão principal do NestJS.
-- Prisma CLI, Client e adaptador PostgreSQL: **7.10.1**.
-- PostgreSQL 16 em Docker.
-- Docker Desktop em execução.
-- VS Code e, opcionalmente, Bruno.
+Cliente HTTP
+    │
+    ▼
+API Gateway — HTTP :3000
+    ├── TCP ──► Users Service — :3001 ──► PostgreSQL (users_db)
+    └── TCP ──► Orders Service — :3002 ─► PostgreSQL (orders_db)
+                       │
+                       └── TCP ──► Users Service
 
-Os exemplos de terminal deste README usam **PowerShell**. Execute os comandos na raiz do projeto, onde está o `package.json`. Código TypeScript deve ser salvo nos arquivos indicados, e não executado diretamente no terminal.
+O Gateway recebe as requisições HTTP e encaminha mensagens aos microserviços. Cada serviço mantém suas próprias regras de negócio e seu próprio banco. O serviço Orders consulta Users por TCP para confirmar a existência do usuário; ele não acessa diretamente o banco de Users.
 
-## Organização dos arquivos
+Estrutura esperada
 
-| Caminho | Conteúdo |
-|---|---|
-| `apps/api-gateway/src/main.ts` | Inicialização HTTP na porta 3000 |
-| `apps/api-gateway/src/app.module.ts` | Registro do cliente TCP `USERS_SERVICE` |
-| `apps/api-gateway/src/users.controller.ts` | Rotas HTTP de usuários |
-| `apps/users/src/main.ts` | Inicialização do microserviço TCP e carregamento do `.env` |
-| `apps/users/src/users.module.ts` | Registro do controller, UsersService e PrismaService |
-| `apps/users/src/users.controller.ts` | Handlers com `@MessagePattern()` |
-| `apps/users/src/users.service.ts` | Regras de negócio e consultas Prisma |
-| `apps/users/src/prisma/prisma.service.ts` | Cliente Prisma e ciclo de conexão |
-| `apps/users/src/generated/prisma/` | Cliente gerado automaticamente |
-| `prisma/schema.prisma` | Modelo de dados e configuração do gerador |
-| `prisma/migrations/` | Histórico versionado de alterações do banco |
-| `prisma.config.ts` | Configuração do Prisma CLI |
-| `webpack.config.js` | Resolução dos imports do cliente Prisma no monorepo |
-| `.env` | URL de conexão local |
+nest-microservices/
+├── apps/
+│   ├── api-gateway/src/
+│   ├── users/src/
+│   └── orders/src/
+├── libs/
+│   └── contracts/src/
+├── prisma/
+│   ├── users/
+│   └── orders/
+├── generated/
+│   ├── users/
+│   └── orders/
+├── .env
+├── nest-cli.json
+└── package.json
 
-Evite pastas duplicadas como `apps/users/src/src`. Os nomes e caminhos dos arquivos devem coincidir com os imports.
+A biblioteca libs/contracts reúne DTOs compartilhados, como CreateUserDto, UpdateUserDto e CreateOrderDto. Ela compartilha contratos de dados, sem centralizar regras de negócio ou acesso aos bancos.
 
-## Criação inicial do monorepo
+Pré-requisitos
 
-Esta seção é para recriar a estrutura do zero. Se o projeto já existe, avance para a instalação.
+Node.js e npm.
 
-```powershell
-cd "$env:USERPROFILE\Documents"
-npx @nestjs/cli@11 new api-gateway --directory nest-microservices --package-manager npm
-cd nest-microservices
-npx nest generate app users
-code .
-```
+NestJS CLI.
 
-A primeira aplicação já é o Gateway. Gerar `users` converte a estrutura em monorepo com duas aplicações. Criar uma aplicação chamada `nest-microservices` e depois gerar `api-gateway` e `users` também mantém a aplicação inicial, totalizando três aplicações.
+PostgreSQL em execução.
 
-## Instalação
+Dois bancos PostgreSQL criados: users_db e orders_db.
 
-Para executar uma cópia existente do projeto:
+Instalação
 
-```powershell
-npm install
-```
+Partindo do monorepo NestJS criado na etapa anterior, crie o serviço Orders e a biblioteca de contratos:
 
-Durante a montagem inicial, as dependências utilizadas são:
+nest g app orders
+nest g library contracts
 
-```powershell
-npm install @nestjs/microservices@11
-npm install -D prisma@7.10.1 @types/pg @types/node
-npm install @prisma/client@7.10.1 @prisma/adapter-pg@7.10.1 pg dotenv
-```
+Quando o CLI solicitar o prefixo de importação da biblioteca, informe @app.
 
-## PostgreSQL com Docker
+Instale as dependências utilizadas neste projeto:
 
-Na primeira configuração, crie o contêiner:
+npm install @nestjs/microservices
+npm install class-validator class-transformer
+npm install @prisma/client @prisma/adapter-pg pg
+npm install -D prisma
 
-```powershell
-docker run --name postgres-users -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=users_db -p 127.0.0.1:15432:5432 -v postgres_users_data:/var/lib/postgresql/data -d postgres:16
-```
+Este projeto considera Prisma 7, com adaptador PostgreSQL configurado explicitamente. Em projetos com Prisma 6, a configuração do client é diferente.
 
-As credenciais são destinadas ao exercício local. A porta 15432 foi escolhida porque as portas 5432 e 5433 estavam ocupadas no ambiente de desenvolvimento.
+Configuração do banco de dados
 
-Se o contêiner já existe, inicie-o em vez de executar novamente o comando de criação:
+Crie os bancos users_db e orders_db no PostgreSQL. Configure as URLs no arquivo .env, na raiz do monorepo:
 
-```powershell
-docker start postgres-users
-```
+USERS_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/users_db"
+ORDERS_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/orders_db"
 
-Confira as portas e a disponibilidade:
+Ajuste usuário, senha, host e porta conforme sua instalação local. Não versione o arquivo .env nem publique credenciais reais.
 
-```powershell
-docker port postgres-users
-docker exec postgres-users pg_isready -U postgres -d users_db
-```
+Cada serviço deve ter seu schema Prisma e sua configuração próprios:
 
-O mapeamento esperado é `127.0.0.1:15432` para a porta interna `5432`. Aguarde a resposta `accepting connections`.
+prisma/users/schema.prisma e prisma/users.config.ts
 
-Neste exercício, apenas o banco roda no Docker. Gateway e Users Service rodam nos terminais do Windows.
+prisma/orders/schema.prisma e prisma/orders.config.ts
 
-## Variáveis de ambiente
+Os schemas definem, respectivamente, os modelos User e Order. As configurações apontam para as variáveis USERS_DATABASE_URL e ORDERS_DATABASE_URL.
 
-Crie e salve um arquivo `.env` na raiz:
+Gere as migrações iniciais e os clients Prisma:
 
-```env
-DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:15432/users_db?schema=public"
-```
+npx prisma migrate dev --config prisma/users.config.ts --name init_users
+npx prisma generate --config prisma/users.config.ts
 
-Em `apps/users/src/main.ts`, carregue o arquivo antes dos demais imports:
+npx prisma migrate dev --config prisma/orders.config.ts --name init_orders
+npx prisma generate --config prisma/orders.config.ts
 
-```typescript
-import 'dotenv/config';
-```
+Os serviços Users e Orders devem importar seus clients gerados separadamente e utilizar PrismaPg com a URL correspondente.
 
-Não publique o `.env`. Acrescente ao `.gitignore`:
+Inicialização
 
-```gitignore
-.env
-/apps/users/src/generated/
-```
+Execute cada aplicação em um terminal separado, na raiz do monorepo:
 
-Versione `prisma/schema.prisma`, `prisma.config.ts`, `webpack.config.js` e todo o diretório `prisma/migrations/`, incluindo `migration_lock.toml`.
+npm run start:dev users
 
-## Configuração do Prisma 7
+npm run start:dev orders
 
-Arquivo `prisma.config.ts`:
+npm run start:dev api-gateway
 
-```typescript
-import 'dotenv/config';
-import { defineConfig, env } from 'prisma/config';
+O API Gateway fica disponível em http://localhost:3000. Users e Orders escutam, respectivamente, nas portas TCP 3001 e 3002.
 
-export default defineConfig({
-  schema: 'prisma/schema.prisma',
-  migrations: {
-    path: 'prisma/migrations',
-  },
-  datasource: {
-    url: env('DATABASE_URL'),
-  },
-});
-```
+As variáveis do .env precisam estar carregadas nos processos que utilizam Prisma. Se a configuração do projeto não carregar o arquivo automaticamente, importe dotenv/config no início dos arquivos main.ts de Users e Orders.
 
-Arquivo `prisma/schema.prisma`:
+Rotas HTTP
 
-```prisma
-generator client {
-  provider     = "prisma-client"
-  output       = "../apps/users/src/generated/prisma"
-  moduleFormat = "cjs"
-}
+Usuários
 
-datasource db {
-  provider = "postgresql"
-}
+Método
 
-model User {
-  id        Int      @id @default(autoincrement())
-  name      String
-  createdAt DateTime @default(now())
-}
-```
+Rota
 
-Valide e prepare o banco de desenvolvimento:
+Ação
 
-```powershell
-npx prisma validate --config ./prisma.config.ts
-npx prisma migrate dev --config ./prisma.config.ts
-npx prisma generate --config ./prisma.config.ts
-```
+POST
 
-Ao criar o primeiro histórico em um banco novo, use `npx prisma migrate dev --name create_users --config ./prisma.config.ts`. Em uma cópia existente, mantenha as migrações já versionadas.
+/users
 
-`prisma generate` gera código e não confirma a conexão com o banco. Execute-o após alterações no schema e após instalar o projeto quando necessário.
+Criar usuário
 
-### PrismaService e injeção de dependências
+GET
 
-O PrismaService importa o cliente de `../generated/prisma/client`, utiliza `PrismaPg` com `DATABASE_URL` e chama `super({ adapter })`. Ele conecta em `onModuleInit()` e desconecta em `onModuleDestroy()`.
+/users
 
-No arquivo `apps/users/src/users.module.ts`, registre ambos os serviços:
+Listar usuários
 
-```typescript
-import { Module } from '@nestjs/common';
-import { UsersController } from './users.controller';
-import { UsersService } from './users.service';
-import { PrismaService } from './prisma/prisma.service';
+GET
 
-@Module({
-  controllers: [UsersController],
-  providers: [UsersService, PrismaService],
-})
-export class UsersModule {}
-```
+/users/:id
 
-No `users.service.ts`, o caminho do import é `./prisma/prisma.service`.
+Buscar usuário por ID
 
-## Ajuste do Webpack
+PATCH
 
-O cliente Prisma gera arquivos TypeScript com referências internas terminadas em `.js`. A configuração abaixo permite ao Webpack resolver essas referências nos arquivos `.ts`.
+/users/:id
 
-Arquivo `webpack.config.js`, na raiz:
+Atualizar usuário
 
-```javascript
-module.exports = function (options) {
-  return {
-    ...options,
-    resolve: {
-      ...options.resolve,
-      extensionAlias: {
-        ...options.resolve?.extensionAlias,
-        '.js': ['.ts', '.js'],
-      },
-    },
-  };
-};
-```
+DELETE
 
-Não edite manualmente os arquivos de `generated/prisma`.
+/users/:id
 
-## Execução das aplicações
+Excluir usuário
 
-Abra dois terminais na raiz do projeto.
+Exemplo de criação:
 
-**Terminal 1 — Users Service:**
-
-```powershell
-npx nest start users --watch --webpack --webpackPath webpack.config.js
-```
-
-**Terminal 2 — API Gateway:**
-
-```powershell
-npx nest start api-gateway --watch --webpack --webpackPath webpack.config.js
-```
-
-Mantenha os dois processos ativos. Para parar cada um, pressione `Ctrl+C` no terminal correspondente.
-
-Para compilar sem iniciar:
-
-```powershell
-npx nest build users --webpack --webpackPath webpack.config.js
-npx nest build api-gateway --webpack --webpackPath webpack.config.js
-```
-
-## Rotas e mensagens
-
-| Método HTTP | Rota | Mensagem TCP | Operação Prisma |
-|---|---|---|---|
-| GET | `/users` | `users.findAll` | `user.findMany()` |
-| GET | `/users/:id` | `users.findOne` | `user.findUnique()` |
-| POST | `/users` | `users.create` | `user.create()` |
-
-O Gateway usa `ClientProxy.send(pattern, payload)`. O Users Controller recebe a mensagem pelo mesmo nome em `@MessagePattern(pattern)` e delega ao UsersService.
-
-`send()` e `@MessagePattern()` implementam requisição e resposta. Para eventos sem resposta, o NestJS oferece `emit()` e `@EventPattern()`.
-
-### Cadastro
-
-```http
 POST http://localhost:3000/users
 Content-Type: application/json
-```
 
-```json
 {
-  "name": "Ana"
+  "name": "Carlos",
+  "email": "carlos@email.com"
 }
-```
 
-Resposta esperada: HTTP **201 Created**, com `id`, `name` e `createdAt`. O ID é gerado pelo banco e pode variar.
+Pedidos
 
-O serviço aceita um nome com 1 a 100 caracteres após remover espaços nas extremidades. A consulta por ID exige um inteiro positivo e verifica a existência do usuário.
+Método
 
-Na versão didática com encaminhamento simples, erros de `RpcException` ainda podem resultar em HTTP 500. Traduzir os erros RPC para HTTP 400/404 e diferenciar indisponibilidade são melhorias futuras.
+Rota
 
-## Testes no Bruno
+Ação
 
-1. Crie uma coleção chamada **Nest Microservices**.
-2. Crie uma requisição **GET** para `http://localhost:3000/users` e envie. Espere HTTP **200**; `[]` indica uma tabela vazia.
-3. Crie uma requisição **POST** para o mesmo endereço.
-4. Na aba **Body**, selecione **JSON** e informe `{"name":"Ana"}`. Confira `Content-Type: application/json` e envie.
-5. Anote o ID retornado e consulte-o com **GET** em `/users/ID`, substituindo `ID` pelo número recebido.
-6. Repita o cadastro com `{"name":"Carlos"}` e execute novamente a listagem.
+POST
 
-O Bruno envia HTTP ao Gateway na porta **3000**. A porta **3001** utiliza o protocolo TCP do NestJS e não é uma URL HTTP.
+/orders
 
-## Testes pelo PowerShell
+Criar pedido
 
-```powershell
-$body = @{ name = "Ana" } | ConvertTo-Json
-Invoke-RestMethod -Uri "http://localhost:3000/users" -Method Post -ContentType "application/json" -Body $body
-Invoke-RestMethod -Uri "http://localhost:3000/users" -Method Get
-```
+GET
 
-Para consultar um usuário, use o ID retornado no cadastro. Por exemplo, se o ID for 1:
+/orders
 
-```powershell
-Invoke-RestMethod -Uri "http://localhost:3000/users/1" -Method Get
-```
+Listar pedidos
 
-### Verificação de persistência
+GET
 
-Cadastre um usuário, pare apenas o Users Service, inicie-o novamente e repita a listagem. O registro deve permanecer no banco. Os usuários Ana e Carlos usados na etapa em memória não são migrados automaticamente.
+/orders/:id
 
-Para consultar diretamente o PostgreSQL:
+Buscar pedido por ID
 
-```powershell
-docker exec -it postgres-users psql -U postgres -d users_db
-```
+Exemplo de criação:
 
-No prompt do PostgreSQL:
+POST http://localhost:3000/orders
+Content-Type: application/json
 
-```sql
-SELECT * FROM "User" ORDER BY id;
-```
+{
+  "userId": 1,
+  "description": "Notebook",
+  "total": 4500.00
+}
 
-Digite `\q` para sair. Para uma interface visual, execute `npx prisma studio --config ./prisma.config.ts` e abra o endereço informado no terminal.
+Para criar o pedido, o serviço Orders consulta Users por TCP e verifica se o userId existe. Se o usuário não for encontrado, o pedido não deve ser persistido.
 
-## Solução de problemas
+Padrões de mensagens TCP
 
-| Problema | Correção |
-|---|---|
-| Arquivo de configuração não encontrado | Salve `prisma.config.ts` na raiz; abrir com `code` não salva automaticamente. |
-| Schema não encontrado | Confira se `prisma/schema.prisma` foi salvo e se o terminal está na raiz. |
-| P1012 no início de um schema aparentemente correto | Verifique a codificação UTF-8 sem BOM. |
-| `Can't resolve './internal/class.js'` ou `enums.js` | Confira `webpack.config.js` e use os comandos com `--webpackPath`. |
-| Nest não resolve `PrismaService` | Inclua `PrismaService` em `providers` do UsersModule. |
-| Método `create` ausente | Implemente `create()` no UsersService chamado pelo controller. |
-| Import de PrismaService não encontrado | Confira o arquivo em `src/prisma/prisma.service.ts` e o import `./prisma/prisma.service`. |
-| Import do UsersController não encontrado | Confira o nome plural `users.controller.ts` na mesma pasta do módulo. |
-| HTTP 404 em POST `/users` | Confira `@Post()` no Gateway e o registro do controller no módulo. |
-| Conexão recusada na porta 3000 | Inicie o Gateway. |
-| Falha TCP ou timeout | Confira o Users Service na porta 3001 e os terminais de ambas as aplicações. |
-| Falha de conexão com o PostgreSQL | Confira contêiner, credenciais e porta 15432 no `.env`. |
-| Porta Docker indisponível | Confira portas ocupadas e reservadas antes de alterar o mapeamento e a URL. |
-| Aviso no editor, mas build passa | Salve tudo e execute `TypeScript: Restart TS Server` no VS Code. |
+Os controllers dos microserviços recebem mensagens por meio de @MessagePattern():
 
-### UTF-8 sem BOM no Windows PowerShell
+Serviço
 
-No Windows PowerShell 5.1, `Set-Content -Encoding utf8` pode adicionar BOM. Para regravar o schema sem essa marca:
+Padrão
 
-```powershell
-$schemaPath = Join-Path (Get-Location).Path 'prisma\schema.prisma'
-$schemaContent = [System.IO.File]::ReadAllText($schemaPath)
-$utf8SemBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText($schemaPath, $schemaContent, $utf8SemBom)
-npx prisma validate --config ./prisma.config.ts
-```
+Operação
 
-### Migração aplicada, mas ausente localmente
+Users
 
-Se o banco já tem uma migração e o diretório local não a contém, restaure os arquivos originais de `prisma/migrations/` a partir do repositório ou do projeto que criou o banco. Preserve os nomes das pastas e o SQL original.
+users.create
 
-Depois, confira:
+Criar usuário
 
-```powershell
-npx prisma migrate status --config ./prisma.config.ts
-npx prisma migrate dev --config ./prisma.config.ts
-```
+Users
 
-`prisma migrate reset` apaga os dados do banco de desenvolvimento. Não o utilize como correção automática para um histórico ausente.
+users.findAll
 
-## Escopo e próximos passos
+Listar usuários
 
-Este projeto demonstra separação de responsabilidades, dois processos NestJS, mensagens TCP e persistência. A validação descrita neste README é manual; não equivale a uma suíte automatizada validada.
+Users
 
-Possíveis evoluções:
+users.findOne
 
-- Padronizar contratos e tipos das mensagens.
-- Mapear erros RPC para respostas HTTP adequadas.
-- Adicionar atualização e exclusão de usuários.
-- Automatizar testes de integração e de ponta a ponta.
-- Adicionar autenticação, autorização e observabilidade.
-- Explorar RabbitMQ, Kafka ou NATS conforme os requisitos.
+Buscar usuário
 
-## Referências
+Users
 
-- [Monorepos no NestJS](https://docs.nestjs.com/cli/monorepo)
-- [Microsserviços no NestJS](https://docs.nestjs.com/microservices/basics)
-- [Prisma ORM 7](https://www.prisma.io/docs/orm/v7)
-- [Resolução de módulos no Webpack](https://webpack.js.org/configuration/resolve/)
-- [Documentação do Bruno](https://docs.usebruno.com/)
+users.update
+
+Atualizar usuário
+
+Users
+
+users.remove
+
+Excluir usuário
+
+Orders
+
+orders.create
+
+Criar pedido
+
+Orders
+
+orders.findAll
+
+Listar pedidos
+
+Orders
+
+orders.findOne
+
+Buscar pedido
+
+O método send() implementa o padrão solicitação-resposta. O método emit() publica eventos sem aguardar uma resposta de negócio; neste tutorial, a comunicação principal é síncrona e usa send().
+
+Fluxo de criação de pedido
+
+O cliente envia POST /orders ao Gateway.
+
+O Gateway valida o DTO e envia a mensagem orders.create.
+
+Orders consulta Users com a mensagem users.findOne.
+
+Users consulta seu próprio banco PostgreSQL.
+
+Se o usuário existir, Orders grava o pedido em orders_db.
+
+A resposta retorna ao cliente pelo Gateway.
+
+Essa chamada entre Orders e Users é síncrona. Se Users estiver indisponível ou exceder o tempo limite, Orders não poderá concluir a criação do pedido.
+
+Exercícios sugeridos
+
+Implementar orders.update e orders.remove.
+
+Criar GET /orders/user/:userId para listar pedidos de um usuário.
+
+Tratar usuário inexistente e erros do Prisma.
+
+Criar um filtro RPC para padronizar erros entre os serviços.
+
+Configurar timeout nas chamadas feitas pelo Gateway.
+
+Impedir a exclusão de usuários que possuam pedidos.
+
+Limitações e próximos passos
+
+Esta implementação é didática e ainda requer melhorias antes de uso em produção, especialmente no tratamento de exceções RPC, indisponibilidade e tentativas de repetição, autenticação e autorização, observabilidade e consistência entre bancos independentes. A exclusão de um usuário não remove automaticamente os pedidos armazenados no banco de Orders.
+
+Na próxima etapa, a proposta é introduzir RabbitMQ e comunicação orientada a eventos, incluindo o evento order.created e um serviço de notificações.
